@@ -45,78 +45,41 @@ def show_queues(host, port):
     conn = beanstalk.Connection(host, port, parse_yaml=True)
     conn.watch('submitted')
     conn.ignore('default')
+    conn.use('submitted')
+
+    stats = conn.stats_tube('submitted')
 
     subq = []
-    while True:
-        j = conn.reserve(timeout=0.5)
-
-        if not j:
-            break
-
+    for i in range(1, stats['total-jobs']+1):
+        j = conn.peek(i)
         job = Job.from_yaml(j.body)
         job.sync_with_job(j)
         subq.append(job)
 
-    map(lambda job: conn.release(jid=job.id), subq)
-
-    conn.watch('failed')
-    conn.ignore('submitted')
-
-    failedq = []
-    while True:
-        j = conn.reserve(timeout=0.5)
-
-        if not j:
-            break
-
-        job = Job.from_yaml(j.body)
-        job.sync_with_job(j)
-        failedq.append(job)
-
-    map(lambda job: conn.release(jid=job.id), failedq)
-
-    conn.watch('completed')
-    conn.ignore('failed')
-
-    compq = []
-    while True:
-        j = conn.reserve(timeout=0.5)
-
-        if not j:
-            break
-
-        job = Job.from_yaml(j.body)
-        job.sync_with_job(j)
-        compq.append(job)
-
-    map(lambda job: conn.release(jid=job.id), compq)
-
     conn.close()
 
     # print queued jobs
-    click.secho('Submitted jobs:')
-    _render_job_table(subq)
+    click.secho('Reserved jobs:')
+    _render_job_table(filter(lambda x: x.state == 'reserved', subq))
+
+    click.secho('Ready jobs:')
+    _render_job_table(filter(lambda x: x.state == 'ready', subq))
 
     click.secho('Completed jobs:')
-    _render_job_table(compq)
-
-    click.secho('Failed jobs:')
-    _render_job_table(failedq)
+    _render_job_table(filter(lambda x: x.state == 'buried', subq))
 
 def _render_job_table(queue):
-    click.secho('\t{id:6s} {command:64s} {ttr:15s}'.format(
-        command='command', ttr='ttr', id='id'))
+    click.secho('\t{id:6s} {command:64s} {ttr:15s} {time_left:15s}'.format(
+        command='command', ttr='ttr', id='id', time_left='time left'))
     click.secho('\t{id:^6s} {command:^64s} {ttr:15s}'.format(
-        command='-'*64, ttr='-'*15, id='-'*6))
+        command='-'*64, ttr='-'*15, id='-'*6, time_left='-'*15))
 
     for j in queue:
         fullcmd = ' '.join([j.cmd] + j.args)
         dt = str(datetime.timedelta(seconds=j.ttr))
-        click.secho('\t{ranid:^6d} {command:64s} {ttr:15s}'.format(
-            command=fullcmd,
-                                                              ranid=j.ranid,
-            ttr=dt))
-        click.secho('\t{ranid:6s} wd: {cwd:61s} {ttr:15s}'.format(ranid='',
-                                                                  ttr='',
-                                                              cwd=j.cwd))
+        dl = str(datetime.timedelta(seconds=j.time_left))
+        click.secho('\t{id:^6d} {command:64s} {ttr:15s} {time_left:15s}'.format(
+            command=fullcmd, id=j.id, ttr=dt, time_left=dl))
+        click.secho('\t{id:6s} wd: {cwd:61s} {ttr:15s} {time_left:15s}'.format(
+            id='', ttr='', cwd=j.cwd, time_left=''))
 

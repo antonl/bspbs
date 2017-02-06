@@ -12,9 +12,6 @@ class Job(straitlets.Serializable):
                            help='list of arguments to add to the command',
                            default_value=list())
 
-    ranid = straitlets.Integer(help='job id that task ran as',
-                               default_value=-1)
-
     id = straitlets.Integer(help='job id on queue', default_value=-1)
 
     env = straitlets.Dict(help='environment variables to add to the run',
@@ -23,10 +20,18 @@ class Job(straitlets.Serializable):
                              default_value='.')
     ttr = straitlets.Float(help='current time-to-run of task',
                            default_value=120.)
+    time_left = straitlets.Float(help='current time left for task',
+                                default_value=-1.)
+    state = straitlets.Enum(['ready', 'reserved', 'delayed', 'buried',
+                             'unsubmitted'], default_value='unsubmitted')
+
 
     def sync_with_job(self, job_object):
         self.id = job_object.jid
         self.conn = job_object.conn
+        #print(job_object.stats())
+        self.state = job_object.stats()['state']
+        self.time_left = job_object.stats()['time-left']
 
     def start(self):
         env = os.environ.copy()
@@ -47,8 +52,6 @@ class Worker:
             self._conn = beanstalk.Connection(host=host, port=port,
                                                 parse_yaml=True)
             self._conn.watch('submitted')
-            self._conn.watch('completed')
-            self._conn.watch('failed')
         except beanstalk.exceptions.SocketError:
             raise RuntimeError('Could not connect to server, connection '
                               'refused.')
@@ -57,8 +60,6 @@ class Worker:
     def handle_job(self):
         try:
             self._conn.watch('submitted')
-            self._conn.ignore('completed')
-            self._conn.ignore('failed')
 
             j = self._conn.reserve(timeout=0.5)
             if j is None:
@@ -67,7 +68,6 @@ class Worker:
 
             job = Job.from_yaml(j.body)
             job.sync_with_job(j)
-            job.ranid = j.jid
         except KeyboardInterrupt:
             print('Got ^C punt, quitting')
             raise KeyboardInterrupt
@@ -98,14 +98,7 @@ class Worker:
             error = 'failed'
         finally:
             job.proc.kill()
-            self._conn.delete(job.id)
-
-        if error == 'failed':
-            self._conn.use('failed')
-            self._conn.put(job.to_yaml())
-        else:
-            self._conn.use('completed')
-            self._conn.put(job.to_yaml())
+            self._conn.bury(job.id)
 
     def handle(self):
         while True:

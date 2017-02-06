@@ -44,13 +44,14 @@ def submit(host, port, cmd, args, ttr):
 def show_queues(host, port):
     conn = beanstalk.Connection(host, port, parse_yaml=True)
     conn.watch('submitted')
-    conn.ignore('default')
     conn.use('submitted')
 
     stats = conn.stats_tube('submitted')
+    #print(stats)
+    maxj = max(stats['total-jobs'], stats['current-jobs-buried'])
 
     subq = []
-    for i in range(1, stats['total-jobs']+1):
+    for i in range(1, maxj+1):
         j = conn.peek(i)
         job = Job.from_yaml(j.body)
         job.sync_with_job(j)
